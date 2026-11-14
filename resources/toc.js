@@ -9,11 +9,10 @@
     "use strict";
     var com_id = "COM_ID";
     var com_counter = 0;
-    var dark_css = CSS;
     var settings = SETTINGS;
 
     function onclick(event) {
-        // We dont want this event to trigger onclick on this element's parent
+        // We don't want this event to trigger onclick on this element's parent
         // block, if any.
         event.stopPropagation();
         var frac = window.pageYOffset/document.body.scrollHeight;
@@ -65,7 +64,7 @@
         var css = '';
         css += '.calibre_toc_hover:hover { cursor: pointer !important; border-top: solid 5px green !important }\n\n';
         if (settings.link) css += 'html > body :link, html > body :link * { color: ' + settings.link + ' !important; }\n\n';
-        if (settings.is_dark_theme) { css += dark_css; }
+        if (settings.is_dark_theme) { css = ':root { color-scheme: dark; }' + css; }
         var style = document.createElement('style');
         style.textContent = css;
         document.documentElement.appendChild(style);

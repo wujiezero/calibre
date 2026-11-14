@@ -3,16 +3,21 @@
 # License: GPLv3 Copyright: 2016, Kovid Goyal <kovid at kovidgoyal.net>
 
 from __future__ import absolute_import, division, print_function, unicode_literals
+
 import json
 import pprint
+from datetime import timedelta
 
+from calibre.utils.date import utcnow
+from calibre.utils.iso8601 import parse_iso8601
 from calibre.web.feeds.recipes import BasicNewsRecipe
+
+oldest_article = 1  # days, includes articles that were published no more than the specified number of days ago
 
 
 def classes(classes):
     q = frozenset(classes.split(' '))
-    return dict(attrs={
-        'class': lambda x: x and frozenset(x.split()).intersection(q)})
+    return dict(attrs={'class': lambda x: x and frozenset(x.split()).intersection(q)})
 
 
 def class_as_string(x):
@@ -36,24 +41,24 @@ def class_startswith(*prefixes):
 
 # From: https://www3.bostonglobe.com/lifestyle/comics?arc404=true
 comics_to_fetch = {
-    "ADAM@HOME": 'ad',
-    "ARLO & JANIS": 'aj',
+    'ADAM@HOME': 'ad',
+    'ARLO & JANIS': 'aj',
     # "CUL DE SAC": 'cds',
     # "CURTIS": 'kfcrt',
-    "DILBERT": 'dt',
-    "DOONESBURY": 'db',
-    "DUSTIN": 'kfdus',
-    "F MINUS": 'fm',
-    "FOR BETTER OR WORSE": 'fb',
+    'DILBERT': 'dt',
+    'DOONESBURY': 'db',
+    'DUSTIN': 'kfdus',
+    'F MINUS': 'fm',
+    'FOR BETTER OR WORSE': 'fb',
     # "GET FUZZY": 'gz',
     # "MOTHER GOOSE & GRIMM": 'tmmgg',
     # "JUMPSTART": 'jt',
-    "MONTY": 'mt',
+    'MONTY': 'mt',
     # "POOCH CAFE",
-    "RHYMES WITH ORANGE": 'kfrwo',
+    'RHYMES WITH ORANGE': 'kfrwo',
     # "ROSE IS ROSE": 'rr',
     # "ZIPPY THE PINHEAD": 'kfzpy',
-    "ZITS": 'kfzt'
+    'ZITS': 'kfzt',
 }
 
 
@@ -61,7 +66,7 @@ def extract_json(raw_html):
     idx = raw_html.find('Fusion.contentCache={')
     close_idx = raw_html.find('</script>', idx)
     raw = raw_html[idx:close_idx]
-    raw = raw[raw.find('{'):]
+    raw = raw[raw.find('{') :]
     idx = raw.find(';Fusion')
     raw = raw[:idx]
     # open('/t/raw.html', 'w').write(raw)
@@ -71,15 +76,17 @@ def extract_json(raw_html):
 
 
 def absolutize_url(url):
-    if url.startswith("//"):
-        return "https:" + url
+    if url.startswith('//'):
+        return 'https:' + url
     if url.startswith('/'):
-        url = "https://www.bostonglobe.com" + url
+        url = 'https://www.bostonglobe.com' + url
     return url
 
 
 def parse_section(raw_html):
     data = extract_json(raw_html)['content-feed']
+    now = utcnow()
+    cutoff_date = now - timedelta(days=oldest_article)
 
     def text(e):
         if not e:
@@ -88,16 +95,23 @@ def parse_section(raw_html):
 
     for group in data.values():
         for elem in group['data']['content_elements']:
+            date = parse_iso8601(elem['publish_date'])
+            if date < cutoff_date:
+                continue
             title = text(elem['headlines'])
             description = text(elem.get('description'))
-            url = absolutize_url(elem['canonical_url'])
-            yield {'title': title, 'url': url, 'description': description}
+            try:
+                url = absolutize_url(elem['canonical_url'])
+            except KeyError:
+                continue
+            yield {'title': title, 'url': url, 'description': description, 'date': ' ' + str(date.date())}
 
 
 def main():
     for sec in 'metro world'.split():
-        for item in parse_section(open('/t/{}.html'.format(sec)).read()):
-            print(item)
+        with open(f'/t/{sec}.html') as f:
+            for item in parse_section(f.read()):
+                print(item)
 
 
 # if __name__ == '__main__':
@@ -105,25 +119,21 @@ def main():
 
 
 class BostonGlobeSubscription(BasicNewsRecipe):
-
-    title = "Boston Globe"
+    title = 'Boston Globe'
     __author__ = 'Kovid Goyal'
     description = 'The Boston Globe'
-    language = 'en'
+    language = 'en_US'
     timefmt = ' [%a, %d %b, %Y]'
     keep_only_tags = [
         class_startswith('headline |', 'subheader |', 'byline |', 'image |', 'lead |', 'body |', 'comic-debug'),
     ]
-    remove_tags = [
-        classes('inline-newsletter ad skip-nav article-footer sharebar arc_ad'),
-        dict(id='continue_button'),
-        dict(name=['meta', 'link'])
-    ]
-    remove_tags_after = dict(attrs={'class': lambda x:x and x.startswith('body |')})
+    remove_tags = [classes('inline-newsletter ad skip-nav article-footer sharebar arc_ad'), dict(id='continue_button'), dict(name=['meta', 'link'])]
+    remove_tags_after = dict(attrs={'class': lambda x: x and x.startswith('body |')})
     remove_attributes = ['style']
     no_stylesheets = True
     scale_news_images = 1600, 1200
     ignore_duplicate_articles = {'url'}
+    browser_type = 'camoufox'
     # simultaneous_downloads = 1
 
     def image_url_processor(self, baseurl, url):
@@ -138,13 +148,13 @@ class BostonGlobeSubscription(BasicNewsRecipe):
                 self.log(pprint.pformat(articles))
                 feeds.append((sec.capitalize(), articles))
                 if self.test:
-                    del articles[self.test[1]:]
+                    del articles[self.test[1] :]
                     if len(feeds) >= self.test[0]:
                         break
 
         articles = []
         for title, slug in comics_to_fetch.items():
-            articles.append({'title':title, 'url':'https://www.bostonglobe.com/games-comics/comics/{}/'.format(slug)})
+            articles.append({'title': title, 'url': 'https://www.bostonglobe.com/games-comics/comics/{}/'.format(slug)})
         if articles:
             feeds.append(('Comics', articles))
         return feeds

@@ -1,20 +1,11 @@
-# -*- coding: utf-8 -*-
-from __future__ import absolute_import, division, print_function, unicode_literals
+# License: GPLv3 Copyright: 2011, Alex Stanev <alex@stanev.org>
 
-store_version = 2  # Needed for dynamic plugin loading
 
-__license__ = 'GPL 3'
-__copyright__ = '2011, Alex Stanev <alex@stanev.org>'
-__docformat__ = 'restructuredtext en'
+store_version = 3  # Needed for dynamic plugin loading
 
 from contextlib import closing
-try:
-    from urllib.parse import quote
-    from urllib.error import HTTPError
-except ImportError:
-    from urllib2 import quote, HTTPError
-
-from lxml import html
+from urllib.error import HTTPError
+from urllib.parse import quote
 
 from qt.core import QUrl
 
@@ -24,6 +15,11 @@ from calibre.gui2.store import StorePlugin
 from calibre.gui2.store.basic_config import BasicStoreConfig
 from calibre.gui2.store.search_result import SearchResult
 from calibre.gui2.store.web_store_dialog import WebStoreDialog
+
+try:
+    from calibre.utils.xml_parse import safe_html_fromstring
+except ImportError:
+    from lxml.html import fromstring as safe_html_fromstring
 
 
 def parse_book_page(doc, base_url, counter):
@@ -39,26 +35,25 @@ def parse_book_page(doc, base_url, counter):
         counter -= 1
 
         s = SearchResult()
-        s.cover_url = 'http:' + ''.join(
-            data.xpath('.//div[@class="media-left"]/a[@class="booklink"]/div/img/@src')).strip()
+        s.cover_url = 'http:' + ''.join(data.xpath('.//div[@class="media-left"]/a[@class="booklink"]/div/img/@src')).strip()
 
         s.title = ''.join(data.xpath('.//div[@class="media-body"]/a[@class="booklink"]/i/text()')).strip()
         alternative_headline = data.xpath('.//div[@class="media-body"]/div[@itemprop="alternativeHeadline"]/text()')
         if len(alternative_headline) > 0:
-            s.title = "{} ({})".format(s.title, ''.join(alternative_headline).strip())
+            s.title = '{} ({})'.format(s.title, ''.join(alternative_headline).strip())
 
         s.author = ', '.join(data.xpath('.//div[@class="media-body"]/div[@class="bookauthor"]/span/a/text()')).strip(', ')
         s.detail_item = id
         s.drm = SearchResult.DRM_UNLOCKED
-        s.downloads['FB2'] = base_url + ''.join(data.xpath(
-            './/div[@class="media-body"]/div[@class="download-links"]/div/a[contains(@class,"dl-fb2")]/@href')).strip().replace(
-            '.zip', '')
-        s.downloads['EPUB'] = base_url + ''.join(data.xpath(
-            './/div[@class="media-body"]/div[@class="download-links"]/div/a[contains(@class,"dl-epub")]/@href')).strip().replace(
-            '.zip', '')
-        s.downloads['TXT'] = base_url + ''.join(data.xpath(
-            './/div[@class="media-body"]/div[@class="download-links"]/div/a[contains(@class,"dl-txt")]/@href')).strip().replace(
-            '.zip', '')
+        s.downloads['FB2'] = base_url + ''.join(
+            data.xpath('.//div[@class="media-body"]/div[@class="download-links"]/div/a[contains(@class,"dl-fb2")]/@href')
+        ).strip().replace('.zip', '')
+        s.downloads['EPUB'] = base_url + ''.join(
+            data.xpath('.//div[@class="media-body"]/div[@class="download-links"]/div/a[contains(@class,"dl-epub")]/@href')
+        ).strip().replace('.zip', '')
+        s.downloads['TXT'] = base_url + ''.join(
+            data.xpath('.//div[@class="media-body"]/div[@class="download-links"]/div/a[contains(@class,"dl-txt")]/@href')
+        ).strip().replace('.zip', '')
         s.formats = 'FB2, EPUB, TXT'
         yield s
 
@@ -66,8 +61,7 @@ def parse_book_page(doc, base_url, counter):
 
 
 class ChitankaStore(BasicStoreConfig, StorePlugin):
-
-    def open(self, parent=None, detail_item=None, external=False):
+    def open(self, gui=None, parent=None, detail_item=None, external=False) -> None:
         url = 'http://chitanka.info'
 
         if external or self.config.get('open_external', False):
@@ -81,7 +75,7 @@ class ChitankaStore(BasicStoreConfig, StorePlugin):
             d = WebStoreDialog(self.gui, url, parent, detail_url)
             d.setWindowTitle(self.name)
             d.set_tags(self.config.get('tags', ''))
-            d.exec_()
+            d.exec()
 
     def search(self, query, max_results=10, timeout=60):
         if isinstance(query, bytes):
@@ -91,7 +85,7 @@ class ChitankaStore(BasicStoreConfig, StorePlugin):
             return
 
         base_url = 'http://chitanka.info'
-        url = base_url + '/search?q=' +  quote(query)
+        url = base_url + '/search?q=' + quote(query)
         counter = max_results
 
         # search for book title
@@ -99,7 +93,7 @@ class ChitankaStore(BasicStoreConfig, StorePlugin):
         try:
             with closing(br.open(url, timeout=timeout)) as f:
                 f = f.read().decode('utf-8')
-                doc = html.fromstring(f)
+                doc = safe_html_fromstring(f)
                 counter = yield from parse_book_page(doc, base_url, counter)
                 if counter <= 0:
                     return
@@ -113,7 +107,7 @@ class ChitankaStore(BasicStoreConfig, StorePlugin):
                     br2 = browser()
                     with closing(br2.open(base_url + author_url, timeout=timeout)) as f:
                         f = f.read().decode('utf-8')
-                        doc = html.fromstring(f)
+                        doc = safe_html_fromstring(f)
                         counter = yield from parse_book_page(doc, base_url, counter)
                         if counter <= 0:
                             break

@@ -13,8 +13,7 @@ from calibre.web.feeds.news import BasicNewsRecipe
 
 def classes(classes):
     q = frozenset(classes.split(' '))
-    return dict(attrs={
-        'class': lambda x: x and frozenset(x.split()).intersection(q)})
+    return dict(attrs={'class': lambda x: x and frozenset(x.split()).intersection(q)})
 
 
 class Jacobinmag(BasicNewsRecipe):
@@ -35,27 +34,20 @@ class Jacobinmag(BasicNewsRecipe):
     issue_url = None
     PREFIX = 'https://www.jacobinmag.com'
     LOGIN = 'https://auth.jacobinmag.com/mini_profile?redirect=https%3A%2F%2Fwww.jacobinmag.com%2F'
-    extra_css = """
+    extra_css = '''
         body{font-family: Antwerp, 'Times New Roman', Times, serif}
         img{margin-top:1em; margin-bottom: 1em; display:block}
         .entry-dek,.entry-author{font-family: Hurme-No3, Futura, sans-serif}
-    """
+    '''
 
-    conversion_options = {
-        'comment': description,
-        'tags': category,
-        'publisher': publisher,
-        'language': language
-    }
+    conversion_options = {'comment': description, 'tags': category, 'publisher': publisher, 'language': language}
 
     remove_tags = [
         dict(id=['post-header-share', 'post-print']),
         dict(name='form'),
     ]
 
-    keep_only_tags = [
-        classes('po__article')
-    ]
+    keep_only_tags = [classes('po__article')]
 
     def parse_index(self):
         ans = []

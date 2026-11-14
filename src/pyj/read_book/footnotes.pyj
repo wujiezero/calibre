@@ -4,14 +4,16 @@ from __python__ import bound_methods, hash_literals
 
 from dom import clear
 from iframe_comm import IframeClient
+from read_book.book_storage import IframeBookStorage
 from read_book.globals import runtime, current_spine_item, set_current_spine_item
 from read_book.resources import finalize_resources, unserialize_html
 from read_book.settings import (
     apply_settings, set_color_scheme_class, update_settings
 )
 
-block_names = dict.fromkeys(v"['p', 'div', 'li', 'td', 'h1', 'h2', 'h2', 'h3', 'h4', 'h5', 'h6', 'body']", True).as_object()
-block_display_styles = dict.fromkeys(v"['block', 'list-item', 'table-cell', 'table']", True).as_object()
+block_names = dict.fromkeys(['p', 'div', 'li', 'td', 'h1', 'h2', 'h2', 'h3', 'h4', 'h5', 'h6', 'body'], True).as_object()
+block_display_styles = dict.fromkeys(['block', 'list-item', 'table-cell', 'table'], True).as_object()
+
 
 def elem_roles(elem):
     return {k.toLowerCase(): True for k in (elem.getAttribute('role') or '').split(' ')}
@@ -31,7 +33,7 @@ def get_containing_block(node):
 
 def is_footnote_link(a, dest_name, dest_frag, src_name, link_to_map):
     roles = elem_roles(a)
-    if roles['doc-noteref']:
+    if roles['doc-noteref'] or roles['doc-biblioref'] or roles['doc-glossref']:
         return True
     if roles['doc-link']:
         return False
@@ -61,7 +63,7 @@ def is_footnote_link(a, dest_name, dest_frag, src_name, link_to_map):
     eid = a.getAttribute('id') or a.getAttribute('name')
     files_linking_to_self = link_to_map[src_name]
     if eid and files_linking_to_self:
-        files_linking_to_anchor = files_linking_to_self[eid] or v'[]'
+        files_linking_to_anchor = files_linking_to_self[eid] or []
         if files_linking_to_anchor.length > 1 or (files_linking_to_anchor.length == 1 and files_linking_to_anchor[0] is not src_name):
             # An <a href="..." id="..."> link that is linked back from some other
             # file in the spine, most likely an endnote. We exclude links that are
@@ -106,7 +108,7 @@ def get_note_container(node):
 
 
 def get_parents_and_self(node):
-    ans = v'[]'
+    ans = []
     while node and node is not document.body:
         ans.push(node)
         node = node.parentNode
@@ -141,6 +143,11 @@ def unhide_tree(elem):
 ok_list_types = {'disc': True, 'circle': True, 'square': True}
 
 
+def is_new_footnote_start(elem, start_elem):
+    c = get_note_container(elem)
+    return c is not start_elem and c is not start_elem.firstElementChild
+
+
 def show_footnote(target, known_anchors):
     if not target:
         return
@@ -160,10 +167,10 @@ def show_footnote(target, known_anchors):
     else:
         # Try to detect natural boundaries based on markup for this note
         found_note_start = False
-        for elem in document.body.getElementsByTagName('*'):
+        for elem in document.documentElement.getElementsByTagName('*'):
             if found_note_start:
                 eid = elem.getAttribute('id')
-                if eid is not target and known_anchors[eid] and get_note_container(elem) is not start_elem:
+                if eid is not target and known_anchors[eid] and is_new_footnote_start(elem, start_elem):
                     # console.log('Breaking footnote on anchor: ' + elem.getAttribute('id'))
                     v'delete get_note_container(elem).do_not_hide'
                     break
@@ -184,14 +191,16 @@ def show_footnote(target, known_anchors):
 
 
 class PopupIframeBoss:
-
     def __init__(self):
         handlers = {
             'initialize': self.initialize,
             'clear': self.on_clear,
             'display': self.display,
         }
-        self.comm = IframeClient(handlers)
+        self.comm = IframeClient(handlers, 'popup-iframe')
+        self.book_storage = IframeBookStorage(def (book_key, entry):
+            self.comm.send_message('book_storage_changed', {'book_key': book_key, 'entry': entry})
+        )
         self.blob_url_map = {}
         self.name = None
         self.frag = None
@@ -199,6 +208,14 @@ class PopupIframeBoss:
 
     def initialize(self, data):
         window.addEventListener('error', self.on_error)
+        window.addEventListener('keydown', self.on_keydown)
+        document.addEventListener('contextmenu', def (ev):
+            ev.preventDefault()
+        )
+
+    def on_keydown(self, ev):
+        if ev.key is 'Escape':
+            self.comm.send_message('close_requested', from_keypress=True)
 
     def on_error(self, evt):
         msg = evt.message
@@ -217,17 +234,18 @@ class PopupIframeBoss:
 
     def display(self, data):
         self.book = data.book
+        self.book_storage.update_from_parent(self.book.key, data.book_storage)
         self.name = data.name
         self.frag = data.frag
         self.link_attr = 'data-' + self.book.manifest.link_uid
         spine = self.book.manifest.spine
         index = spine.indexOf(data.name)
         set_current_spine_item({
-            'name':data.name,
-            'is_first':index is 0,
-            'is_last':index is spine.length - 1,
+            'name': data.name,
+            'is_first': index is 0,
+            'is_last': index is spine.length - 1,
             'index': index,
-            'initial_position':data.initial_position
+            'initial_position': data.initial_position
         })
         update_settings(data.settings)
         for name in self.blob_url_map:
@@ -276,7 +294,7 @@ class PopupIframeBoss:
         known_anchors = {}
         ltm = self.book.manifest.link_to_map?[self.name]
         if ltm:
-            known_anchors = {k:True for k in Object.keys(ltm)}
+            known_anchors = {k: True for k in Object.keys(ltm)}
         show_footnote(self.frag, known_anchors)
 
     def content_loaded(self):
@@ -293,5 +311,6 @@ class PopupIframeBoss:
         self.comm.send_message('content_loaded', height=document.documentElement.scrollHeight + 25)
 
 
+@no_prune
 def main():
     main.boss = PopupIframeBoss()

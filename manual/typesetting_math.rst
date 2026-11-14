@@ -20,13 +20,13 @@ TeX notation for mathematics. You will see that you can use normal TeX
 commands, with the small caveat that ampersands and less than and greater than
 signs have to be written as &amp; &lt; and &gt; respectively.
 
-The first step is to tell calibre that this will contains mathematics. You do this by
+The first step is to tell calibre that this will contain mathematics. You do this by
 adding the following snippet of code to the <head> section of the HTML file::
 
     <script type="text/x-mathjax-config"></script>
 
 That's it, now you can type mathematics just as you would in a .tex file. For
-example, here are Lorentz's equations::
+example, here are the Lorenz equations::
 
     <h2>The Lorenz Equations</h2>
 
@@ -55,6 +55,10 @@ with an e-book you can distribute easily to other people.
 
 .. literalinclude:: mathjax.html
     :language: html
+
+.. note:: The calibre E-book viewer supports MathML as well as TeX, but you must
+   include the ``<script type="text/x-mathjax-config"></script>`` line in
+   your HTML file otherwise the MathML will not render.
 
 More information
 -----------------

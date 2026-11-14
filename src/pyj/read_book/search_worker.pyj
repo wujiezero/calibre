@@ -2,20 +2,26 @@
 # License: GPL v3 Copyright: 2021, Kovid Goyal <kovid at kovidgoyal.net>
 from __python__ import bound_methods, hash_literals
 
+from traceback import format_exception
+
 from read_book.db import DB
 from read_book.resources import text_from_serialized_html
-from traceback import format_exception
 
 GET_SPINE_FAILED = 1
 CONNECT_FAILED = 2
 UNHANDLED_ERROR = 3
 DB_ERROR = 4
 
-_RE_ESCAPE = /[-\/\\^$*+?.()|[\]{}]/g
+_RE_ESCAPE = /[\/\\^$*+?.()|[\]{}]/g
 quote_map = {'"': '"“”', "'": "'‘’"}
 qpat = /(['"])/g
 spat = /(\s+)/g
 invisible_chars = '(?:[\u00ad\u200c\u200d]{0,1})'
+# Matches each "atom" in an escaped string: an escape sequence (\X) or a
+# single Unicode code point.  The u flag ensures surrogate pairs are kept
+# together as one code point.
+_ESCAPED_ATOM = /\\[\s\S]|[\s\S]/gu
+
 
 def escape(string):
     return string.replace(_RE_ESCAPE, '\\$&')
@@ -31,7 +37,9 @@ def text_to_regex(text):
         return r'\s+'
     has_leading = text.lstrip() is not text
     has_trailing = text.rstrip() is not text
-    ans = v'["\s+"]' if has_leading else v'[]'
+    ans = []
+    if has_leading:
+        ans.push(r'\s+')
     for wpart in split_string(spat, text.strip()):
         if not wpart.strip():
             ans.push(r'\s+')
@@ -40,27 +48,24 @@ def text_to_regex(text):
                 r = quote_map[part]
                 if r:
                     ans.push('[' + r + ']')
-                else:
-                    chars = v'[]'
-                    for ch in part:
-                        chars.push(escape(ch))
-                    chars.join(invisible_chars)
-                    ans.push(part)
+                elif part:
+                    atoms = escape(part).match(_ESCAPED_ATOM)
+                    if atoms:
+                        ans.push(atoms.join(invisible_chars))
     if has_trailing:
         ans.push(r'\s+')
     return ans.join('')
 
 
 class ToCOffsetMap:
-
     def __init__(self, toc_nodes, offset_map, previous_toc_node, parent_map):
-        self.toc_nodes = toc_nodes or v'[]'
+        self.toc_nodes = toc_nodes or []
         self.offset_map = offset_map or {}
         self.previous_toc_node = previous_toc_node or None
         self.parent_map = parent_map or {}
 
     def toc_nodes_for_offset(self, offset):
-        matches = v'[]'
+        matches = []
         for node in self.toc_nodes:
             q = self.offset_map[node.id]
             if q?:
@@ -69,9 +74,9 @@ class ToCOffsetMap:
                 matches.push(node)
         if not matches and self.previous_toc_node:
             matches.push(self.previous_toc_node)
-        ans = v'[]'
+        ans = []
         if matches.length:
-            ancestors = v'[]'
+            ancestors = []
             node = matches[-1]
             parent = self.parent_map[node.id]
             while parent?:
@@ -117,13 +122,12 @@ def toc_nodes_for_search_result(sr):
     sidx = sr.spine_idx
     name = wc.current_book.spine[sidx]
     if not name:
-        return v'[]'
+        return []
     tmap = toc_offset_map_for_name(name)
     return tmap.toc_nodes_for_offset(sr.offset)
 
 
 class Worker:
-
     def __init__(self):
         self.db = None
         self.connected_to_db = False
@@ -167,7 +171,7 @@ def search_in_text_of(name):
         text = m[0]
         start, end = m.index, r.lastIndex
         before = haystack[Math.max(0, start - ctx_size):start]
-        after = haystack[end:end+ctx_size]
+        after = haystack[end:end + ctx_size]
         q = (before or '')[-15:] + text + (after or '')[:15]
         match_counts[q] = match_counts[q] or 0
         wc.result_num += 1
@@ -178,12 +182,17 @@ def search_in_text_of(name):
         }
         result.toc_nodes = toc_nodes_for_search_result(result)
         self.postMessage({'type': 'search_result', 'id': wc.current_query_id, 'result': result})
+        if wc.current_query.query.only_first_match:
+            break
         match_counts[q] += 1
 
 
 def queue_next_spine_item(spine_idx, allow_current_name):
-    spine_idx %= wc.current_book.spine.length
+    spine_idx = spine_idx % wc.current_book.spine.length
     name = wc.current_book.spine[spine_idx]
+    if wc.current_query.query.only_first_match and wc.result_num > 0:
+        send_search_complete()
+        return
     if not name or (not allow_current_name and name is wc.current_query.current_name):
         send_search_complete()
         return
@@ -200,7 +209,11 @@ def got_spine_item(query_id, spine_idx, result):
         return
     if result.ok:
         name = wc.current_book.spine[spine_idx]
-        wc.text_cache[name] = text_from_serialized_html(result.result, True)
+        data = result.result
+        if v'data instanceof Blob':  # happens for titlepage which is stored as html for some reason
+            queue_next_spine_item(spine_idx + 1)
+            return
+        wc.text_cache[name] = text_from_serialized_html(data, True)
         search_in_text_of(name)
         setTimeout(queue_next_spine_item.bind(None, spine_idx + 1), 0)
     else:
@@ -218,7 +231,7 @@ def regex_for_query(query):
         flags += 'i'
     if query.mode is not 'regex':
         if query.mode is 'word':
-            words = v'[]'
+            words = []
             for part in expr.split(' '):
                 words.push(r'\b' + text_to_regex(part) + r'\b')
             expr = words.join(r'\s+')
@@ -239,6 +252,10 @@ def perform_search(query):
     idx = wc.current_book.spine.indexOf(query.current_name)
     if idx < 0:
         idx = 0
+    # Ensure current_name is always a valid spine item name so that the search
+    # terminates after going through all spine items exactly once (the search
+    # loop ends when it wraps back around to current_name).
+    wc.current_query.current_name = wc.current_book.spine[idx]
     queue_next_spine_item(idx, True)
 
 
@@ -262,7 +279,7 @@ def on_worker_db_error(title, msg, details):
 def worker_main():
     wc.db = DB(worker_connection_done, on_worker_db_error)
 
-    self.onmessage = def(e):
+    self.onmessage = def (e):
         if e.data.type is 'search':
             wc.current_query_id = e.data.id
             if wc.connected_to_db:
